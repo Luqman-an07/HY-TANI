@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Sprout, Mail, User, Lock, Eye, EyeOff, ArrowRight, CheckCircle, XCircle, AlertCircle, Check, X } from 'lucide-react';
+import { supabase } from '../lib/supabaseClient'; 
+import { Sprout, Mail, User, Lock, Eye, EyeOff, ArrowRight, CheckCircle, XCircle, AlertCircle, Check, X, Loader2, ChevronLeft } from 'lucide-react';
 
 const AuthScreen = ({ onLogin }) => {
   const [isRegister, setIsRegister] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  
+  // State Notifikasi & Error
   const [globalError, setGlobalError] = useState('');
+  const [regSuccess, setRegSuccess] = useState(false); // STATE BARU: Untuk trigger tampilan sukses
 
   // Form State
   const [formData, setFormData] = useState({
@@ -15,17 +19,13 @@ const AuthScreen = ({ onLogin }) => {
   });
 
   // Validation States
-  const [emailStatus, setEmailStatus] = useState('neutral'); // neutral, valid, invalid
+  const [emailStatus, setEmailStatus] = useState('neutral');
   const [emailMsg, setEmailMsg] = useState('');
   const [passwordCriteria, setPasswordCriteria] = useState({
-    lower: false,
-    upper: false,
-    number: false,
-    symbol: false,
-    length: false
+    lower: false, upper: false, number: false, symbol: false, length: false
   });
 
-  // --- LOGIC: PASSWORD VALIDATION (REAL TIME) ---
+  // --- LOGIC: PASSWORD VALIDATION ---
   useEffect(() => {
     if (isRegister) {
       const pwd = formData.password;
@@ -39,133 +39,113 @@ const AuthScreen = ({ onLogin }) => {
     }
   }, [formData.password, isRegister]);
 
-  // --- LOGIC: EMAIL CHECK (REAL TIME) ---
+  // --- LOGIC: EMAIL CHECK ---
   const checkEmail = (email) => {
     if (!email) {
-      setEmailStatus('neutral');
-      setEmailMsg('');
-      return;
+      setEmailStatus('neutral'); setEmailMsg(''); return;
     }
-
-    // Cek format email dasar dulu
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      setEmailStatus('neutral'); // Jangan merah dulu kalau belum selesai ngetik
-      return;
-    }
-
-    const users = JSON.parse(localStorage.getItem('hytani_users') || '[]');
-    const userExists = users.find(u => u.email === email);
-
-    if (isRegister) {
-      // LOGIKA REGISTER: Email tidak boleh ada (Duplikat)
-      if (userExists) {
-        setEmailStatus('invalid'); // Merah
-        setEmailMsg('Email sudah digunakan!');
-      } else {
-        setEmailStatus('valid'); // Hijau
-        setEmailMsg('Email tersedia.');
-      }
+    if (emailRegex.test(email)) {
+      setEmailStatus('valid'); setEmailMsg('Format email valid.');
     } else {
-      // LOGIKA LOGIN: Email harus ada
-      if (userExists) {
-        setEmailStatus('valid'); // Hijau
-        setEmailMsg('Email ditemukan.');
-      } else {
-        setEmailStatus('invalid'); // Merah
-        setEmailMsg('Email tidak terdaftar!');
-      }
+      setEmailStatus('invalid'); setEmailMsg('Format email salah.');
     }
   };
 
-  // Handler saat mengetik
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
     setGlobalError('');
-
-    if (name === 'email') {
-      checkEmail(value);
-    }
+    if (name === 'email') checkEmail(value);
   };
 
-  // Handler Submit
-  const handleSubmit = (e) => {
+  // --- HANDLER SUBMIT ---
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setGlobalError('');
 
-    // 1. Validasi Awal sebelum proses
     if (isRegister) {
       const { lower, upper, number, symbol, length } = passwordCriteria;
       if (!lower || !upper || !number || !symbol || !length) {
-        setGlobalError('Password belum memenuhi kriteria keamanan!');
-        return;
+        setGlobalError('Password belum memenuhi kriteria keamanan!'); return;
       }
-      if (emailStatus === 'invalid') {
-        setGlobalError('Email tidak valid untuk pendaftaran.');
-        return;
-      }
-    } else {
-      // Login Logic Validation
-      if (emailStatus === 'invalid') {
-        setGlobalError('Email tidak valid. Silakan periksa kembali.');
-        return;
-      }
+    }
+    if (emailStatus === 'invalid') {
+        setGlobalError('Email tidak valid. Silakan periksa kembali.'); return;
     }
 
     setLoading(true);
 
-    setTimeout(() => {
-      const users = JSON.parse(localStorage.getItem('hytani_users') || '[]');
-
+    try {
       if (isRegister) {
-        // PROSES REGISTER
-        const newUser = { 
-          name: formData.name, 
-          email: formData.email, 
+        // --- REGISTER ---
+        const { error } = await supabase.auth.signUp({
+          email: formData.email,
           password: formData.password,
-          role: 'Komunikator Desa',
-          isProfileComplete: false, 
-          villageData: null 
-        };
-        
-        users.push(newUser);
-        localStorage.setItem('hytani_users', JSON.stringify(users));
-        localStorage.setItem('hytani_session', JSON.stringify(newUser));
-        onLogin(newUser);
+          options: { data: { full_name: formData.name } }
+        });
+
+        if (error) throw error;
+
+        // JIKA SUKSES -> AKTIFKAN TAMPILAN SUKSES
+        setRegSuccess(true); 
+        setFormData({ name: '', email: '', password: '' }); // Reset form
 
       } else {
-        // PROSES LOGIN
-        const validUser = users.find(u => u.email === formData.email);
-        
-        if (validUser && validUser.password === formData.password) {
-          // Sukses
-          localStorage.setItem('hytani_session', JSON.stringify(validUser));
-          onLogin(validUser);
-        } else {
-          // Gagal (Password Salah)
-          setLoading(false);
-          setGlobalError('Password salah! Silakan coba lagi.');
-          setFormData(prev => ({ ...prev, password: '' })); // Kosongkan password saja
-          // Email tetap dibiarkan agar user tidak perlu ketik ulang
+        // --- LOGIN ---
+        const { error } = await supabase.auth.signInWithPassword({
+          email: formData.email,
+          password: formData.password,
+        });
+
+        if (error) {
+            if(error.message.includes("Invalid login credentials")) throw new Error("Email atau password salah.");
+            throw error;
         }
       }
-    }, 1000);
+    } catch (error) {
+      setGlobalError(error.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Reset form saat pindah mode (Login <-> Register)
   const toggleMode = () => {
     setIsRegister(!isRegister);
+    setRegSuccess(false); // Reset success state jika pindah mode
     setFormData({ name: '', email: '', password: '' });
-    setEmailStatus('neutral');
-    setEmailMsg('');
-    setGlobalError('');
+    setEmailStatus('neutral'); setEmailMsg(''); setGlobalError('');
     setPasswordCriteria({ lower: false, upper: false, number: false, symbol: false, length: false });
   };
 
+  // --- TAMPILAN SUKSES REGISTER (MODAL IN-PLACE) ---
+  if (regSuccess) {
+    return (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
+            <div className="bg-white w-full max-w-md p-8 rounded-3xl shadow-2xl border border-slate-100 text-center animate-in zoom-in duration-300">
+                <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <CheckCircle size={40} className="text-emerald-600" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">Akun Berhasil Dibuat!</h2>
+                <p className="text-slate-500 mb-8">
+                    Selamat datang di ekosistem HY-TANI. Silakan masuk menggunakan email dan password yang baru saja Anda daftarkan.
+                </p>
+                <button 
+                    onClick={() => { setRegSuccess(false); setIsRegister(false); }}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-emerald-200 transition-all active:scale-95"
+                >
+                    Masuk Sekarang
+                </button>
+            </div>
+        </div>
+    );
+  }
+
+  // --- TAMPILAN UTAMA (LOGIN/REGISTER FORM) ---
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
       <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col md:flex-row border border-slate-100 min-h-[600px]">
+        
         {/* Left Side (Visual) */}
         <div className="bg-emerald-900 p-8 flex flex-col justify-center items-center text-center md:w-5/12 relative overflow-hidden py-16 md:py-8">
           <div className="absolute inset-0 opacity-10" style={{backgroundImage: 'radial-gradient(#fff 1px, transparent 1px)', backgroundSize: '24px 24px'}}></div>
@@ -174,7 +154,7 @@ const AuthScreen = ({ onLogin }) => {
           </div>
           <h1 className="text-3xl font-extrabold text-white tracking-tight relative z-10">HY-TANI</h1>
           <p className="text-emerald-200 text-sm mt-2 uppercase tracking-widest font-medium relative z-10">Hybrid Technology for Tani</p>
-          <div className="mt-10 text-emerald-100/60 text-xs relative z-10 font-mono bg-emerald-950/30 px-3 py-1 rounded-full"><p>v1.1.0 &bull; Secure Auth</p></div>
+          <div className="mt-10 text-emerald-100/60 text-xs relative z-10 font-mono bg-emerald-950/30 px-3 py-1 rounded-full"><p>v2.0 &bull; Cloud Connected</p></div>
         </div>
         
         {/* Right Side (Form) */}
@@ -183,7 +163,6 @@ const AuthScreen = ({ onLogin }) => {
             <h2 className="text-2xl md:text-3xl font-bold text-slate-800 mb-2">{isRegister ? 'Gabung Komunitas' : 'Selamat Datang'}</h2>
             <p className="text-slate-500 mb-6 leading-relaxed text-sm">{isRegister ? 'Buat akun Komunikator Desa baru.' : 'Masuk untuk akses dashboard satelit.'}</p>
             
-            {/* Global Error Alert */}
             {globalError && (
               <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl flex items-center animate-bounce">
                 <AlertCircle size={16} className="mr-2 flex-shrink-0" /> {globalError}
@@ -206,7 +185,6 @@ const AuthScreen = ({ onLogin }) => {
                 </div>
               )}
               
-              {/* INPUT EMAIL DENGAN VALIDASI VISUAL */}
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-600 ml-1 uppercase">Email</label>
                 <div className="relative group">
@@ -220,19 +198,12 @@ const AuthScreen = ({ onLogin }) => {
                         'border-slate-200 focus:ring-emerald-500'}`} 
                     required value={formData.email} onChange={handleChange}
                   />
-                  {/* Ikon Indikator di Kanan */}
                   {emailStatus === 'valid' && <CheckCircle className="absolute right-3 top-3.5 text-emerald-500 w-5 h-5 animate-in zoom-in" />}
                   {emailStatus === 'invalid' && <XCircle className="absolute right-3 top-3.5 text-red-500 w-5 h-5 animate-in zoom-in" />}
                 </div>
-                {/* Pesan Helper Email */}
-                {emailMsg && (
-                  <p className={`text-xs ml-1 font-medium ${emailStatus === 'valid' ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {emailMsg}
-                  </p>
-                )}
+                {emailMsg && <p className={`text-xs ml-1 font-medium ${emailStatus === 'valid' ? 'text-emerald-600' : 'text-red-500'}`}>{emailMsg}</p>}
               </div>
 
-              {/* INPUT PASSWORD */}
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-600 ml-1 uppercase">Password</label>
                 <div className="relative group">
@@ -248,7 +219,6 @@ const AuthScreen = ({ onLogin }) => {
                   </button>
                 </div>
                 
-                {/* INDIKATOR KEKUATAN PASSWORD (Hanya saat Register) */}
                 {isRegister && (
                   <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mt-2 grid grid-cols-2 gap-2">
                     <CriteriaItem isValid={passwordCriteria.length} label="Min. 8 Karakter" />
@@ -261,7 +231,7 @@ const AuthScreen = ({ onLogin }) => {
               </div>
               
               <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-emerald-200 transition-all transform active:scale-[0.98] flex items-center justify-center space-x-2 mt-6" disabled={loading}>
-                {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <><span>{isRegister ? 'Daftar Sekarang' : 'Masuk Dashboard'}</span><ArrowRight size={18} /></>}
+                {loading ? <Loader2 className="w-5 h-5 animate-spin"/> : <><span>{isRegister ? 'Daftar Sekarang' : 'Masuk Dashboard'}</span><ArrowRight size={18} /></>}
               </button>
             </form>
             
@@ -275,7 +245,6 @@ const AuthScreen = ({ onLogin }) => {
   );
 };
 
-// Komponen Kecil untuk Checklist Password
 const CriteriaItem = ({ isValid, label }) => (
   <div className={`flex items-center text-xs ${isValid ? 'text-emerald-600 font-bold' : 'text-slate-400'}`}>
     {isValid ? <Check size={12} className="mr-1.5" strokeWidth={3} /> : <X size={12} className="mr-1.5" />}
