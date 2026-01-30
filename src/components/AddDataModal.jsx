@@ -4,7 +4,7 @@ import {
   Sprout, Timer, Leaf, Droplets, Bug, 
   Trash2, Navigation, MousePointerClick, Check, Undo2, PlayCircle,
   Info, AlertTriangle, Clock, Calendar, AlertCircle, Crosshair,
-  TrendingUp, Activity, ChevronDown
+  TrendingUp, Activity, ChevronDown, WifiOff, Locate, Loader2 // <--- Import Loader2
 } from 'lucide-react';
 import { MapContainer, TileLayer, Polygon, Marker, useMapEvents, Polyline } from 'react-leaflet';
 import L from 'leaflet';
@@ -22,15 +22,11 @@ const vertexIcon = L.divIcon({ className: 'bg-white border-2 border-emerald-600 
 let DefaultIcon = L.icon({ iconUrl: icon, shadowUrl: iconShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-// --- COMPONENT: ACCORDION ITEM ---
+// --- COMPONENT: ACCORDION ITEM (Tetap Sama) ---
 const FormSection = ({ title, icon: Icon, isOpen, onClick, children }) => {
     return (
         <div className={`bg-white rounded-xl shadow-sm border transition-all duration-300 overflow-hidden ${isOpen ? 'border-emerald-500 ring-1 ring-emerald-500/20' : 'border-slate-100'}`}>
-            <button 
-                type="button"
-                onClick={onClick}
-                className="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-slate-50 transition-colors cursor-pointer outline-none touch-manipulation"
-            >
+            <button type="button" onClick={onClick} className="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-slate-50 transition-colors cursor-pointer outline-none touch-manipulation">
                 <div className="flex items-center">
                     <div className={`p-1.5 rounded-lg mr-3 ${isOpen ? 'bg-emerald-100' : 'bg-slate-100'}`}>
                         <Icon size={16} className={isOpen ? 'text-emerald-600' : 'text-slate-400'} />
@@ -41,7 +37,6 @@ const FormSection = ({ title, icon: Icon, isOpen, onClick, children }) => {
                 </div>
                 <ChevronDown size={16} className={`text-slate-400 transition-transform duration-300 ${isOpen ? 'rotate-180 text-emerald-500' : ''}`} />
             </button>
-            
             <div className={`transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[800px] opacity-100' : 'max-h-0 opacity-0'}`}>
                 <div className="p-4 border-t border-slate-50 bg-white">
                     {children}
@@ -51,7 +46,7 @@ const FormSection = ({ title, icon: Icon, isOpen, onClick, children }) => {
     );
 };
 
-// --- DRAWING CONTROLLER ---
+// --- DRAWING CONTROLLER (Tetap Sama) ---
 const DrawingController = ({ isDrawing, onAddPoint }) => {
     useMapEvents({
         click(e) {
@@ -65,7 +60,7 @@ const DrawingController = ({ isDrawing, onAddPoint }) => {
 };
 
 const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) => {
-  // --- STATE ---
+  // --- STATE UTAMA ---
   const [formData, setFormData] = useState({
     farmer: '', contact: '', joinDate: '', name: '', size: '', age: '',
     plantingDate: '', harvestDate: '', nextVisit: '', lat: null, lng: null, polygon: [] 
@@ -78,6 +73,13 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
   const [mode, setMode] = useState('idle');
   const [tempPoints, setTempPoints] = useState([]); 
   const mapRef = useRef(null);
+  
+  // STATE: DETEKSI OFFLINE
+  const [isOfflineMode, setIsOfflineMode] = useState(!navigator.onLine);
+
+  // STATE BARU: FEEDBACK GPS
+  const [gpsLoading, setGpsLoading] = useState(false);
+  const [gpsNotification, setGpsNotification] = useState(null); // { type: 'success' | 'error', msg: '' }
 
   const mapCenter = useMemo(() => {
       return userLocation?.lat ? [userLocation.lat, userLocation.lng] : [-2.5489, 118.0149];
@@ -97,6 +99,10 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
 
   // --- EFFECT ---
   useEffect(() => {
+    const handleStatusChange = () => setIsOfflineMode(!navigator.onLine);
+    window.addEventListener('online', handleStatusChange);
+    window.addEventListener('offline', handleStatusChange);
+
     if (initialData) {
       setFormData({
         farmer: initialData.farmer, contact: initialData.contact || '', joinDate: initialData.joinDate || new Date().toISOString().split('T')[0],
@@ -113,8 +119,14 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
     } else {
       resetForm();
     }
+
+    return () => {
+        window.removeEventListener('online', handleStatusChange);
+        window.removeEventListener('offline', handleStatusChange);
+    };
   }, [initialData, isOpen]);
 
+  // FIX RENDER MAP
   useEffect(() => {
       if (isOpen && mapRef.current) {
           const target = initialData?.lat ? [initialData.lat, initialData.lng] : mapCenter;
@@ -129,14 +141,75 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
       }
   }, [isOpen, initialData, mapCenter]);
 
-  // --- ACTIONS ---
+  // --- ACTION HANDLERS ---
   const resetMapView = () => { if(mapRef.current) mapRef.current.flyTo(mapCenter, 16); };
+  
+  // --- FITUR GPS DENGAN UI BARU ---
+  const handleUseGPS = () => {
+      if (!navigator.geolocation) {
+          setGpsNotification({ type: 'error', msg: 'Browser tidak mendukung GPS.' });
+          return;
+      }
+
+      setGpsLoading(true);
+      setGpsNotification(null);
+
+      navigator.geolocation.getCurrentPosition(
+          (position) => {
+              const { latitude, longitude } = position.coords;
+              const offset = 0.0005; // Membuat kotak ~50m
+              const dummyPolygon = [
+                  [latitude - offset, longitude - offset],
+                  [latitude + offset, longitude - offset],
+                  [latitude + offset, longitude + offset],
+                  [latitude - offset, longitude + offset]
+              ];
+              
+              setFormData(prev => ({
+                  ...prev,
+                  lat: latitude,
+                  lng: longitude,
+                  size: "0.1",
+                  polygon: dummyPolygon
+              }));
+              setTempPoints(dummyPolygon);
+              setMode('finished');
+              setActiveSection('location');
+              
+              if(mapRef.current) {
+                  mapRef.current.setView([latitude, longitude], 18);
+                  mapRef.current.invalidateSize();
+              }
+
+              setGpsLoading(false);
+              setGpsNotification({ type: 'success', msg: 'Lokasi Anda berhasil dikunci!' });
+              
+              // Hilangkan notif sukses setelah 3 detik
+              setTimeout(() => setGpsNotification(null), 3000);
+          },
+          (error) => {
+              setGpsLoading(false);
+              let errorMsg = "Gagal mengambil lokasi.";
+              if (error.code === 1) errorMsg = "Izin lokasi ditolak.";
+              else if (error.code === 2) errorMsg = "Sinyal GPS lemah/hilang.";
+              else if (error.code === 3) errorMsg = "Waktu habis (Timeout).";
+              
+              setGpsNotification({ type: 'error', msg: errorMsg });
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+  };
+
   const startDrawing = () => { setMode('drawing'); setTempPoints([]); setFormData(prev => ({ ...prev, lat: null, lng: null, size: '', polygon: [] })); setActiveSection(null); };
   const addPoint = (latlng) => setTempPoints(prev => [...prev, [latlng.lat, latlng.lng]]);
   const undoPoint = () => setTempPoints(prev => prev.slice(0, -1));
   
   const finishDrawing = () => {
-      if (tempPoints.length < 3) { alert("Minimal 3 titik!"); return; }
+      if (tempPoints.length < 3) { 
+          setGpsNotification({ type: 'error', msg: 'Minimal 3 titik sudut!' });
+          setTimeout(() => setGpsNotification(null), 2000);
+          return; 
+      }
       try {
           const turfCoords = tempPoints.map(pt => [pt[1], pt[0]]); turfCoords.push(turfCoords[0]); 
           const poly = turfPolygon([turfCoords]); const areaM2 = area(poly); const center = centroid(poly);
@@ -154,7 +227,7 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
     } else { setFormData(prev => ({ ...prev, plantingDate: pDateVal })); }
   };
 
-  // --- CALCULATION ---
+  // --- CALCULATION (Tetap Sama) ---
   useEffect(() => {
     if (scheduleType === 'auto') {
       const date = new Date(); let daysToAdd = 7; let reason = "";
@@ -172,6 +245,7 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
     setFormData({ farmer: '', contact: '', joinDate: today, name: '', size: '', age: '', plantingDate: '', harvestDate: '', nextVisit: '', lat: null, lng: null, polygon: [] });
     setParameters({ water: '', fertilizer: '', pest: '' });
     setScheduleType('auto'); setMode('idle'); setTempPoints([]); setActiveSection('owner');
+    setGpsNotification(null);
   };
 
   useEffect(() => {
@@ -190,21 +264,24 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!formData.lat || !formData.polygon.length) { alert("Wajib gambar lokasi lahan!"); return; }
+    if (!formData.lat || !formData.polygon.length) { 
+        setGpsNotification({ type: 'error', msg: 'Wajib tentukan lokasi lahan!' });
+        setTimeout(() => setGpsNotification(null), 3000);
+        return; 
+    }
     onSave({ ...formData, ...initialData, ...calculation, waterScore: parameters.water, pestScore: parameters.pest, fertScore: parameters.fertilizer });
   };
 
   if (!isOpen) return null;
 
   return (
-    // PERBAIKAN: Z-INDEX 9999
     <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-0 md:p-4 animate-in fade-in duration-300">
       
-      {/* MODAL: Responsive Flex Layout */}
       <div className="bg-white w-full max-w-7xl h-[100dvh] md:h-[95vh] rounded-none md:rounded-2xl shadow-2xl flex flex-col md:flex-row overflow-hidden border border-slate-700">
         
-        {/* === KOLOM 1: PETA (ATAS DI MOBILE, KIRI DI DESKTOP) === */}
+        {/* === KOLOM 1: PETA === */}
         <div className="w-full md:w-[60%] h-[35vh] min-h-[300px] md:h-full relative bg-slate-100 flex flex-col border-b md:border-b-0 md:border-r border-slate-200 order-1 shrink-0">
+            
             {/* Header Peta */}
             <div className="bg-white px-3 py-2 md:px-4 md:py-3 border-b border-slate-200 flex justify-between items-center shadow-sm z-10 shrink-0">
                 <div className="flex items-center space-x-2 md:space-x-3 overflow-hidden">
@@ -213,6 +290,18 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
                     {mode === 'finished' && <div className="flex items-center text-emerald-700 text-xs md:text-sm font-bold truncate"><Check size={16} className="mr-1 md:mr-2"/> <span className="truncate">Selesai ({formData.size} Ha)</span></div>}
                 </div>
                 <div className="flex space-x-1 md:space-x-2 shrink-0">
+                    {/* BUTTON GPS DARURAT (DENGAN LOADING STATE) */}
+                    {mode === 'idle' && (
+                        <button 
+                            onClick={handleUseGPS} 
+                            disabled={gpsLoading}
+                            className={`flex items-center px-3 py-1.5 md:px-4 md:py-2 rounded-lg text-[10px] md:text-xs font-bold border transition-all whitespace-nowrap ${gpsLoading ? 'bg-blue-100 text-blue-700 border-blue-200 cursor-wait' : 'bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200'}`}
+                            title="Gunakan GPS jika peta tidak muncul"
+                        >
+                            {gpsLoading ? <Loader2 size={14} className="mr-1 md:mr-2 animate-spin"/> : <Locate size={14} className="mr-1 md:mr-2"/>}
+                            {gpsLoading ? 'Mencari...' : 'GPS'}
+                        </button>
+                    )}
                     {mode === 'idle' && <button onClick={startDrawing} className="flex items-center px-3 py-1.5 md:px-4 md:py-2 bg-blue-600 text-white rounded-lg text-[10px] md:text-xs font-bold hover:bg-blue-700 shadow-md whitespace-nowrap"><PlayCircle size={14} className="mr-1 md:mr-2"/> Gambar</button>}
                     {mode === 'drawing' && (
                         <>
@@ -223,8 +312,26 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
                     {(mode === 'drawing' || mode === 'finished') && <button onClick={resetDrawing} className="flex items-center px-2 py-1.5 md:px-3 md:py-2 bg-red-50 text-red-600 rounded-lg text-[10px] md:text-xs font-bold border border-red-100 hover:bg-red-100"><Trash2 size={14} className="mr-1"/> Batal</button>}
                 </div>
             </div>
+
             {/* Map Canvas */}
             <div className="flex-1 relative z-0 cursor-crosshair h-full w-full">
+                
+                {/* --- NOTIFIKASI GPS (TOAST) --- */}
+                {gpsNotification && (
+                    <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-[500] px-4 py-2.5 rounded-full shadow-xl flex items-center space-x-2 animate-in slide-in-from-top-4 fade-in duration-300 backdrop-blur-md border ${gpsNotification.type === 'success' ? 'bg-emerald-100/90 border-emerald-200 text-emerald-800' : 'bg-red-100/90 border-red-200 text-red-800'}`}>
+                        {gpsNotification.type === 'success' ? <Check size={16} className="text-emerald-600"/> : <AlertTriangle size={16} className="text-red-600"/>}
+                        <span className="text-xs font-bold">{gpsNotification.msg}</span>
+                    </div>
+                )}
+
+                {/* WARNING OFFLINE MODE */}
+                {isOfflineMode && (
+                    <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[450] bg-amber-100/80 backdrop-blur-sm border border-amber-300/50 px-3 py-1.5 rounded-lg shadow-sm flex items-center max-w-[90%]">
+                        <WifiOff size={12} className="text-amber-700 mr-2 shrink-0"/>
+                        <span className="text-[10px] font-medium text-amber-800">Mode Offline: Peta mungkin kosong. Gunakan GPS.</span>
+                    </div>
+                )}
+
                 <MapContainer center={mapCenter} zoom={17} style={{ height: '100%', width: '100%' }} className="bg-slate-200" ref={mapRef} doubleClickZoom={false} zoomControl={false}> 
                     <TileLayer url="https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}" subdomains={['mt0','mt1','mt2','mt3']} />
                     <DrawingController isDrawing={mode === 'drawing'} onAddPoint={addPoint} />
@@ -232,25 +339,23 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
                     {mode === 'finished' && formData.polygon.length > 0 && (<Polygon positions={formData.polygon} pathOptions={{ color: '#10b981', fillOpacity: 0.4, weight: 3 }} />)}
                     {formData.lat && <Marker position={[formData.lat, formData.lng]} />}
                 </MapContainer>
+                
                 <button onClick={resetMapView} className="absolute bottom-4 right-4 z-[400] bg-white p-2 rounded-lg shadow-md text-slate-500 hover:text-blue-600" title="Reset View"><Crosshair size={20} /></button>
                 {mode === 'drawing' && <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-800/80 text-white px-3 py-1.5 rounded-full text-[10px] md:text-xs font-medium pointer-events-none backdrop-blur shadow-xl z-[400] whitespace-nowrap text-center w-[90%] md:w-auto">Ketuk peta untuk titik sudut.</div>}
             </div>
         </div>
 
-        {/* === KOLOM 2: FORMULIR (BAWAH DI MOBILE, KANAN DI DESKTOP) === */}
+        {/* === KOLOM 2: FORMULIR === */}
         <div className="flex-1 flex flex-col min-h-0 bg-slate-50 md:border-l border-slate-200 shadow-xl z-20 order-2">
-            
-            {/* A. FORM HEADER (Fixed Top of Section) */}
             <div className="px-4 py-3 md:px-6 md:py-4 bg-white border-b border-slate-200 flex justify-between items-center shrink-0">
                 <div><h2 className="text-base md:text-lg font-bold text-slate-800">Administrasi Lahan</h2><p className="text-[10px] md:text-xs text-slate-500">Isi field bertanda <span className="text-red-500">*</span></p></div>
                 <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400 hover:text-red-500"><X size={20}/></button>
             </div>
 
-            {/* B. FORM BODY (SCROLLABLE AREA) */}
             <div className="flex-1 overflow-y-auto p-4 md:p-6 scroll-smooth bg-slate-50">
                 <form id="addFarmForm" onSubmit={handleSubmit} className="space-y-3 pb-4">
                     
-                    {/* Accordion 1: Identitas */}
+                    {/* (Isi Form Identitas, Lahan, Jadwal, Kondisi - TETAP SAMA SEPERTI SEBELUMNYA) */}
                     <FormSection title="Data Pemilik" icon={User} isOpen={activeSection === 'owner'} onClick={() => toggleSection('owner')}>
                         <div className="space-y-4">
                             <div>
@@ -273,7 +378,6 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
                         </div>
                     </FormSection>
 
-                    {/* Accordion 2: Lokasi */}
                     <FormSection title="Data Lahan" icon={MapPin} isOpen={activeSection === 'location'} onClick={() => toggleSection('location')}>
                         <div className="space-y-4">
                             <div>
@@ -285,11 +389,10 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
                                 <span className="text-xs text-emerald-800 font-medium flex items-center"><Ruler size={14} className="mr-2"/> Luas Terhitung:</span>
                                 <span className="text-sm font-black text-emerald-700">{formData.size || "0.0"} Ha</span>
                             </div>
-                            {formData.size === "" && <p className="text-[10px] text-amber-600 italic">Silakan gambar lahan di peta terlebih dahulu.</p>}
+                            {formData.size === "" && <p className="text-[10px] text-amber-600 italic">Silakan gambar lahan di peta atau gunakan GPS.</p>}
                         </div>
                     </FormSection>
 
-                    {/* Accordion 3: Jadwal */}
                     <FormSection title="Jadwal Tanam" icon={Timer} isOpen={activeSection === 'schedule'} onClick={() => toggleSection('schedule')}>
                         <div className="grid grid-cols-2 gap-4">
                             <div>
@@ -312,7 +415,6 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
                         </div>
                     </FormSection>
 
-                    {/* Accordion 4: Fisik */}
                     <FormSection title="Kondisi Fisik" icon={Leaf} isOpen={activeSection === 'physical'} onClick={() => toggleSection('physical')}>
                         <div className="space-y-3">
                             <div className="relative">
@@ -336,7 +438,6 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
                         </div>
                     </FormSection>
 
-                    {/* Summary Dashboard */}
                     <div className={`rounded-xl p-4 border-2 transition-colors ${statusStyles.bg} ${statusStyles.border}`}>
                         <div className="flex justify-between items-start mb-4">
                             <div>
@@ -374,7 +475,6 @@ const AddDataModal = ({ isOpen, onClose, onSave, initialData, userLocation }) =>
                 </form>
             </div>
 
-            {/* C. FORM FOOTER (Fixed Bottom - Selalu Terlihat) */}
             <div className="p-4 border-t border-slate-200 bg-white flex justify-end space-x-3 shrink-0 z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
                 <button onClick={onClose} className="px-4 py-2.5 rounded-xl text-slate-500 font-bold hover:bg-slate-100 text-xs tracking-wide transition-colors">BATAL</button>
                 <button type="submit" form="addFarmForm" className="flex-1 md:flex-none px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-lg shadow-emerald-200 transition-transform active:scale-95 text-xs flex items-center justify-center tracking-wide">
