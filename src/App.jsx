@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Database, Wifi, WifiOff, CloudOff, Loader2, RefreshCw } from 'lucide-react';
+import { Database, Wifi, WifiOff, CloudOff, Loader2, RefreshCw, SignalLow } from 'lucide-react';
 import { supabase } from './lib/supabaseClient'; 
 import { registerPolygonToSatellite, getSatelliteNDVI } from './lib/satelliteApi';
-import { addToQueue, processOfflineQueue, getQueue } from './lib/offlineSync'; 
+import { addToQueue, processOfflineQueue, getQueue } from './lib/offlineSync';
+// IMPORT BARU: Generator Laporan
+import { generatePDFReport } from './lib/reportGenerator'; 
 
 // Imports Data
 import { generatePlots, initialFarms } from './data/mockData'; 
@@ -41,6 +43,9 @@ const App = () => {
   const [isDataLoading, setIsDataLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false); 
   
+  // STATE: DETEKSI SINYAL LEMAH ("Lie-Fi")
+  const [isUnstable, setIsUnstable] = useState(false);
+
   // State untuk Profil & Header Badge
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
   
@@ -59,8 +64,6 @@ const App = () => {
   const [farmToDelete, setFarmToDelete] = useState(null); 
   const [bulkDeleteIds, setBulkDeleteIds] = useState([]); 
   const [showSimModal, setShowSimModal] = useState(false);
-  
-  // State Baru untuk Check-In QR
   const [checkInFarm, setCheckInFarm] = useState(null); 
 
   // ==========================================
@@ -95,20 +98,45 @@ const App = () => {
     localStorage.setItem('hytani_data', JSON.stringify(farms));
   }, [farms]);
 
+  // --- LOGIKA DETEKSI JARINGAN (Connection Quality Monitor) ---
   useEffect(() => {
-    const handleOnline = async () => {
+    const handleOnline = () => {
         setIsOffline(false);
-        showNotification("Koneksi Kembali! Memproses antrian offline...");
+        showNotification("Koneksi Kembali! Memproses antrian...");
         handleManualSync();
     };
 
     const handleOffline = () => {
         setIsOffline(true);
-        showNotification("Mode Offline Aktif. Data akan disimpan lokal.");
+        setIsUnstable(false); 
+        showNotification("Mode Offline Aktif.");
     };
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+
+    // Monitor Sinyal Lemah setiap 15 detik
+    const qualityInterval = setInterval(async () => {
+        if (isOffline) return; 
+
+        // 1. Cek Network Information API
+        const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        if (connection) {
+            if (connection.effectiveType === 'slow-2g' || connection.effectiveType === '2g') {
+                setIsUnstable(true);
+                return;
+            }
+        }
+
+        // 2. Fallback Ping Test (Fetch Favicon kecil)
+        try {
+            await fetch('https://www.google.com/favicon.ico', { mode: 'no-cors', signal: AbortSignal.timeout(3000) });
+            setIsUnstable(false); 
+        } catch (error) {
+            console.log("Network detected as unstable/slow");
+            setIsUnstable(true);
+        }
+    }, 15000);
 
     const queueInterval = setInterval(() => {
         const queue = getQueue();
@@ -119,8 +147,9 @@ const App = () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       clearInterval(queueInterval);
+      clearInterval(qualityInterval);
     };
-  }, []);
+  }, [isOffline]);
 
   const fetchUserProfile = async (userId) => {
     try {
@@ -165,7 +194,7 @@ const App = () => {
         external_polygon_id: f.external_polygon_id
       }));
       setFarms(mappedData);
-    } catch (error) { console.log("Fetch skipped / Error"); } 
+    } catch (error) { console.log("Fetch skipped"); } 
     finally { setIsDataLoading(false); }
   };
 
@@ -209,7 +238,7 @@ const App = () => {
       try {
           const { data, error } = await supabase.rpc('process_checkin', { target_farm_id: farmId });
           if (error) throw error;
-          showNotification(`✅ Check-In Berhasil! Jadwal berikutnya: ${new Date(data.next_visit).toLocaleDateString('id-ID')}`);
+          showNotification(`✅ Check-In Berhasil!`);
           await fetchFarms(); 
       } catch (err) {
           console.error(err);
@@ -233,7 +262,9 @@ const App = () => {
     let satelliteNDVI = parseFloat(submittedData.ndvi) || 0; 
     let satelliteDate = null; 
 
-    if (navigator.onLine && !editingFarm) {
+    const isActuallyOnline = navigator.onLine && !isOffline;
+
+    if (isActuallyOnline && !editingFarm) {
         try {
             showNotification("Menghubungi Satelit...");
             satellitePolygonId = await registerPolygonToSatellite(submittedData.name, finalLat, finalLng);
@@ -245,10 +276,9 @@ const App = () => {
                     showNotification(`NDVI Satelit: ${satelliteNDVI}`);
                 }
             }
-        } catch(e) { console.log("Satellite skip offline"); }
+        } catch(e) { console.log("Satellite skip"); }
     }
 
-    // LOGIKA PERBAIKAN STATUS (Bugfix sebelumnya)
     const finalStatus = submittedData.status 
         ? submittedData.status 
         : (satelliteNDVI > 0.7 ? 'sehat' : satelliteNDVI > 0.4 ? 'waspada' : 'bahaya');
@@ -266,7 +296,7 @@ const App = () => {
         planting_date: submittedData.plantingDate || null,
         harvest_date: submittedData.harvestDate || null,
         next_visit: submittedData.nextVisit || null,
-        status: finalStatus, // Gunakan status final
+        status: finalStatus, 
         ndvi: satelliteNDVI,
         satellite_date: satelliteDate,
         prediction: submittedData.prediction,
@@ -278,7 +308,7 @@ const App = () => {
         external_polygon_id: satellitePolygonId
     };
 
-    if (navigator.onLine) {
+    if (isActuallyOnline) {
         setIsDataLoading(true);
         try {
             if (editingFarm) {
@@ -326,7 +356,7 @@ const App = () => {
         } else {
             setFarms([optimisticData, ...farms]);
         }
-        showNotification("OFFLINE: Data disimpan di perangkat. Akan dikirim saat online.");
+        showNotification("TERSIMPAN LOKAL: Data akan dikirim saat koneksi stabil.");
     }
     setShowAddModal(false);
     setEditingFarm(null);
@@ -334,7 +364,8 @@ const App = () => {
   };
 
   const executeDelete = async () => {
-    if (navigator.onLine) {
+    const isActuallyOnline = navigator.onLine && !isOffline;
+    if (isActuallyOnline) {
         setIsDataLoading(true);
         try {
             if (farmToDelete) {
@@ -363,7 +394,8 @@ const App = () => {
     const dbPayload = { lat: newLat, lng: newLng };
     if (newPolygon) dbPayload.polygon_data = newPolygon;
 
-    if (navigator.onLine) {
+    const isActuallyOnline = navigator.onLine && !isOffline;
+    if (isActuallyOnline) {
         await supabase.from('farms').update(dbPayload).eq('id', id);
         showNotification("Posisi & Bentuk Lahan diperbarui!");
     } else {
@@ -396,6 +428,29 @@ const App = () => {
         showNotification("Profil dan Wilayah Kerja tersimpan!"); 
     } else {
         showNotification("Gagal menyimpan profil.");
+    }
+  };
+
+  // --- HANDLER DOWNLOAD PDF (REAL) ---
+  const handleDownloadReport = () => {
+    if (farms.length === 0) {
+        showNotification("Tidak ada data untuk diunduh.");
+        return;
+    }
+
+    try {
+        showNotification("Menyiapkan dokumen PDF...");
+        
+        // Panggil generator dengan data farms dan profil user saat ini
+        generatePDFReport(farms, userProfile);
+        
+        setTimeout(() => {
+            showNotification("Laporan berhasil diunduh!");
+        }, 1500);
+        
+    } catch (error) {
+        console.error("Download Error:", error);
+        showNotification("Gagal membuat laporan PDF.");
     }
   };
 
@@ -449,7 +504,6 @@ const App = () => {
   const confirmDelete = (farm) => { setFarmToDelete(farm); setBulkDeleteIds([]); };
   const confirmBulkDelete = (ids) => { setBulkDeleteIds(ids); setFarmToDelete(null); };
   const handleVisitSaved = () => { setCompletingFarm(null); showNotification("Kunjungan dicatat!"); };
-  const handleDownloadReport = () => { showNotification("Mengunduh data..."); };
 
   // --- RENDER ---
   if (isLoadingAuth) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 size={40} className="text-emerald-600 animate-spin"/></div>;
@@ -464,13 +518,13 @@ const App = () => {
         isOffline={isOffline}
         toggleOffline={() => setIsOffline(!isOffline)}
         onGlobalScan={handleGlobalScan}
-        offlineQueueCount={offlineQueueCount} // <--- Pass ke Layout
-        onSync={handleManualSync}             // <--- Pass ke Layout
+        offlineQueueCount={offlineQueueCount}
+        onSync={handleManualSync}
     >
       
       {/* GLOBAL LOADING */}
       {(isDataLoading || isSyncing) && (
-        <div className="fixed inset-0 bg-white/50 backdrop-blur-sm z-[100] flex items-center justify-center">
+        <div className="fixed inset-0 bg-white/50 backdrop-blur-sm z-[10000] flex items-center justify-center">
             <div className="bg-white p-4 rounded-xl shadow-xl flex items-center space-x-3">
                 {isSyncing ? <RefreshCw size={24} className="text-blue-600 animate-spin"/> : <Loader2 size={24} className="text-emerald-600 animate-spin"/>}
                 <span className="font-bold text-slate-700">{isSyncing ? "Menyinkronkan..." : "Loading..."}</span>
@@ -478,17 +532,32 @@ const App = () => {
         </div>
       )}
 
-      {/* NOTIFICATION */}
+      {/* NOTIFICATION (TOAST - KANAN ATAS) */}
+      {/* Z-Index: 11000 (Paling Tinggi) */}
       {notification && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[110] bg-slate-900/90 text-white px-6 py-4 rounded-xl shadow-2xl animate-bounce flex items-center">
-          <Database className="w-5 h-5 mr-3 text-emerald-400" /> <span className="text-sm font-medium">{notification}</span>
+        <div className="fixed top-20 right-4 md:top-6 md:right-6 z-[11000] animate-in slide-in-from-right fade-in duration-300">
+          <div className="bg-slate-900/95 backdrop-blur text-white px-5 py-3.5 rounded-xl shadow-2xl flex items-center border border-slate-700 max-w-[85vw] md:max-w-md">
+             <Database className="w-5 h-5 mr-3 text-emerald-400 shrink-0" /> 
+             <span className="text-sm font-medium leading-snug">{notification}</span>
+          </div>
         </div>
       )}
 
-      {/* OFFLINE BANNER */}
-      {isOffline && (
-        <div className="fixed bottom-0 inset-x-0 z-[100] bg-slate-800 text-white py-2 px-4 text-center text-xs font-bold uppercase tracking-wider flex items-center justify-center">
-           <CloudOff size={16} className="mr-2 text-slate-400" /> Mode Offline Aktif
+      {/* TOAST SARAN OFFLINE (Jika Sinyal Buruk / Unstable) */}
+      {/* Muncul di bawah tengah, menawarkan mode offline */}
+      {isUnstable && !isOffline && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 md:bottom-6 md:left-auto md:right-24 z-[11000] animate-in slide-in-from-bottom-4 duration-500 w-full max-w-sm px-4">
+           <div className="bg-orange-600/95 backdrop-blur text-white p-4 rounded-2xl shadow-2xl border border-orange-500 flex flex-col items-start gap-2">
+              <div className="flex items-center space-x-2">
+                  <SignalLow size={20} className="animate-pulse"/> 
+                  <span className="font-bold text-sm">Sinyal Tidak Stabil</span>
+              </div>
+              <p className="text-xs text-orange-100 leading-tight">Proses penyimpanan data mungkin gagal atau lambat.</p>
+              <div className="flex space-x-2 w-full mt-1">
+                  <button onClick={() => setIsUnstable(false)} className="flex-1 py-1.5 px-3 bg-orange-700 hover:bg-orange-800 rounded-lg text-xs font-bold transition-colors">Abaikan</button>
+                  <button onClick={() => { setIsOffline(true); setIsUnstable(false); }} className="flex-1 py-1.5 px-3 bg-white text-orange-700 hover:bg-orange-50 rounded-lg text-xs font-bold shadow-sm transition-colors">Masuk Offline Mode</button>
+              </div>
+           </div>
         </div>
       )}
 
@@ -526,7 +595,7 @@ const App = () => {
       ) : (
         <>
           {activeTab === 'peta' && (selectedFarm ? 
-            <FarmerDetailFull farm={selectedFarm} onBack={() => setSelectedFarm(null)} onCompleteVisit={(f) => setCompletingFarm(f)} onEdit={(f) => { setEditingFarm(f); setShowAddModal(true); }} onDelete={(f) => confirmDelete(f)}/> : 
+            <FarmerDetailFull farm={selectedFarm} user={userProfile} onBack={() => setSelectedFarm(null)} onCompleteVisit={(f) => setCompletingFarm(f)} onEdit={(f) => { setEditingFarm(f); setShowAddModal(true); }} onDelete={(f) => confirmDelete(f)}/> : 
             <MapView farms={farms} isOffline={isOffline} onSelectFarm={setSelectedFarm} user={userProfile} onUpdateLocation={handleLocationUpdate} onDownloadReport={handleDownloadReport}/>
           )}
           {activeTab === 'data' && <DataView farms={farms} />}

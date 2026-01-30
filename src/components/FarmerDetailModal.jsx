@@ -23,7 +23,7 @@ const FarmerDetailModal = ({ isOpen, onClose, farm }) => {
 
   const joinDate = farm.joinDate ? formatDate(farm.joinDate) : "Jan 2024";
 
-  // --- FUNGSI GENERATE KARTU (TETAP SAMA - STABIL) ---
+  // --- FUNGSI GENERATE KARTU ---
   const generateAndDownloadCard = () => {
     setIsDownloading(true);
     try {
@@ -85,7 +85,8 @@ const FarmerDetailModal = ({ isOpen, onClose, farm }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[80] flex items-center justify-center p-4 animate-in fade-in duration-300">
+    // FIX Z-INDEX: z-[9999] agar di atas Sidebar & Header
+    <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 animate-in fade-in duration-300">
       
       {/* Container Utama */}
       <div className="bg-slate-50 w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-300 border border-slate-200">
@@ -134,7 +135,7 @@ const FarmerDetailModal = ({ isOpen, onClose, farm }) => {
                             <p className="text-sm font-bold uppercase tracking-wide">{farm.farmer}</p>
                         </div>
 
-                        {/* Tombol Cetak (Floating di dalam kartu saat hover/active) */}
+                        {/* Tombol Cetak */}
                         <div className="mt-4 flex justify-center">
                             <button 
                                 onClick={generateAndDownloadCard}
@@ -178,7 +179,7 @@ const FarmerDetailModal = ({ isOpen, onClose, farm }) => {
                 {/* === KONTEN KANAN: DATA & ANALISIS (65%) === */}
                 <div className="w-full md:w-[65%] p-6 space-y-6">
                     
-                    {/* 1. Header Stats (Highlight Utama) */}
+                    {/* 1. Header Stats */}
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
                             <div className="flex items-center justify-between mb-2">
@@ -203,7 +204,7 @@ const FarmerDetailModal = ({ isOpen, onClose, farm }) => {
                         </div>
                     </div>
 
-                    {/* 2. Status Kesehatan (Alert Box) */}
+                    {/* 2. Status Kesehatan */}
                     <div className={`p-4 rounded-xl border flex items-start space-x-4 ${farm.status === 'sehat' ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
                         <div className={`p-2 rounded-full ${farm.status === 'sehat' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
                             <Activity size={20}/>
@@ -220,7 +221,7 @@ const FarmerDetailModal = ({ isOpen, onClose, farm }) => {
                         </div>
                     </div>
 
-                    {/* 3. Parameter Fisik (Grid Kecil) */}
+                    {/* 3. Parameter Fisik */}
                     <div>
                         <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 flex items-center">
                             <Leaf size={14} className="mr-2"/> Kondisi Fisik Terakhir
