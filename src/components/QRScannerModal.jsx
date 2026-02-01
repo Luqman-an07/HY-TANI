@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
-import { X, ScanLine, Zap, ZapOff, Camera, AlertCircle, Keyboard, ArrowRight, ChevronLeft } from 'lucide-react';
+import { X, ScanLine, Zap, ZapOff, Camera, AlertCircle, Keyboard, ArrowRight, ChevronLeft, QrCode } from 'lucide-react';
 
 const QRScannerModal = ({ isOpen, onClose, onScanSuccess }) => {
     const [scanError, setScanError] = useState(null);
@@ -12,59 +12,68 @@ const QRScannerModal = ({ isOpen, onClose, onScanSuccess }) => {
     
     const scannerRef = useRef(null);
 
+    // --- 1. LOGIKA UTAMA SCANNER (KAMERA) ---
     useEffect(() => {
-        let html5QrCode;
+        const cleanupScanner = async () => {
+            if (scannerRef.current) {
+                try {
+                    if (scannerRef.current.isScanning) {
+                        await scannerRef.current.stop();
+                    }
+                    scannerRef.current.clear();
+                } catch (err) {
+                    console.warn("Cleanup warning:", err);
+                }
+                scannerRef.current = null;
+            }
+        };
 
         const startScanner = async () => {
             setScanError(null);
 
             if (isOpen && !isManualInput) {
+                // Delay sedikit agar DOM render sempurna
+                await new Promise(r => setTimeout(r, 100));
+
+                const elementId = "qr-reader-stream";
+                if(!document.getElementById(elementId)) return;
+
+                await cleanupScanner();
+
                 try {
-                    const elementId = "qr-reader-stream";
-                    if(!document.getElementById(elementId)) return;
-
-                    if (scannerRef.current) {
-                        try { await scannerRef.current.clear(); } catch(e){}
-                    }
-
-                    html5QrCode = new Html5Qrcode(elementId);
+                    const html5QrCode = new Html5Qrcode(elementId);
                     scannerRef.current = html5QrCode;
 
-                    // Konfigurasi Kamera Optimal
-                    const constraints = { 
-                        facingMode: "environment",
-                        focusMode: "continuous",
-                        width: { min: 640, ideal: 1280, max: 1920 },
-                        height: { min: 480, ideal: 720, max: 1080 }
+                    // Config Parameter 1 (Hanya facingMode)
+                    const cameraConfig = { facingMode: "environment" }; 
+
+                    // Config Parameter 2 (Settings)
+                    const qrConfig = { 
+                        fps: 15, 
+                        qrbox: { width: 250, height: 250 },
+                        aspectRatio: 1.0,
+                        formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ]
                     };
 
                     await html5QrCode.start(
-                        constraints, 
-                        { 
-                            fps: 15, 
-                            qrbox: { width: 250, height: 250 },
-                            aspectRatio: 1.0,
-                            formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ]
-                        },
+                        cameraConfig, 
+                        qrConfig,
                         (decodedText) => handleSuccess(decodedText, html5QrCode),
                         (errorMessage) => { /* ignore */ }
                     );
                 } catch (err) {
-                    console.error("Camera Error:", err);
-                    setScanError("Gagal akses kamera.");
+                    console.error("Camera Start Error:", err);
+                    setScanError("Gagal akses kamera. Pastikan izin diberikan.");
                 }
+            } else {
+                cleanupScanner();
             }
         };
 
-        const timer = setTimeout(() => {
-            if(isOpen && !isManualInput) startScanner();
-        }, 300);
+        startScanner();
 
         return () => {
-            clearTimeout(timer);
-            if (scannerRef.current && scannerRef.current.isScanning) {
-                scannerRef.current.stop().catch(err => console.log("Stop ignored"));
-            }
+            cleanupScanner();
         };
     }, [isOpen, isManualInput]);
 
@@ -81,24 +90,39 @@ const QRScannerModal = ({ isOpen, onClose, onScanSuccess }) => {
         }
     };
 
+    // --- 2. FIX UX: HANDLER SUBMIT MANUAL (KEYBOARD FRIENDLY) ---
     const handleManualSubmit = (e) => {
-        e.preventDefault();
+        e.preventDefault(); // Mencegah reload halaman
+        
         if (manualId.trim()) {
+            // Paksa Keyboard Turun (Blur)
             if (document.activeElement instanceof HTMLElement) {
                 document.activeElement.blur();
             }
+
+            // Gunakan timeout super singkat agar UI tidak glitch saat keyboard turun
             setTimeout(() => {
                 handleSuccess(manualId, null);
                 setManualId('');
-            }, 100);
+            }, 50); 
         }
+    };
+
+    // --- 3. FIX UX: HANDLER PINDAH MODE (KEYBOARD FRIENDLY) ---
+    const handleSwitchToCamera = () => {
+        // Paksa keyboard turun dulu sebelum ganti state
+        // Ini mencegah tombol harus diklik 2x
+        if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+        }
+        setIsManualInput(false);
     };
 
     const toggleFlash = () => {
         if (scannerRef.current) {
             scannerRef.current.applyVideoConstraints({ advanced: [{ torch: !isFlashOn }] })
             .then(() => setIsFlashOn(!isFlashOn))
-            .catch(() => alert("Flash tidak didukung."));
+            .catch(() => alert("Flash tidak didukung di perangkat ini."));
         }
     };
 
@@ -107,15 +131,15 @@ const QRScannerModal = ({ isOpen, onClose, onScanSuccess }) => {
     return (
         <div className="fixed inset-0 z-[9999] bg-black text-white flex flex-col animate-in fade-in duration-300">
             
-            {/* HEADER (Sticky Top) */}
+            {/* HEADER */}
             <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-center z-20 bg-gradient-to-b from-black/90 to-transparent">
                 {!isManualInput ? (
                     <button type="button" onClick={toggleFlash} className="p-3 rounded-full bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/20 transition-all">
                         {isFlashOn ? <Zap size={20} className="text-yellow-400 fill-yellow-400"/> : <ZapOff size={20} className="text-slate-300"/>}
                     </button>
                 ) : (
-                    // Tombol Back khusus mode manual
-                    <button type="button" onClick={() => setIsManualInput(false)} className="p-3 rounded-full bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/20 transition-all text-slate-300 hover:text-white">
+                    // Tombol Back di Header juga pakai handler aman
+                    <button type="button" onClick={handleSwitchToCamera} className="p-3 rounded-full bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/20 transition-all text-slate-300 hover:text-white">
                         <ChevronLeft size={20} />
                     </button>
                 )}
@@ -133,10 +157,12 @@ const QRScannerModal = ({ isOpen, onClose, onScanSuccess }) => {
             {/* CONTENT AREA */}
             <div className="flex-1 relative flex flex-col justify-center items-center overflow-hidden bg-black">
                 
-                {/* --- LAYOUT 1: KAMERA SCANNER --- */}
-                <div id="qr-reader-stream" className={`w-full h-full object-cover ${isManualInput ? 'hidden' : 'block'}`}></div>
+                {/* --- MODE KAMERA --- */}
+                {!isManualInput && (
+                    <div id="qr-reader-stream" className="w-full h-full object-cover"></div>
+                )}
 
-                {/* Overlay Kotak Scan (Hanya Muncul saat Mode Kamera) */}
+                {/* Overlay Kotak Scan */}
                 {!isManualInput && !scanError && (
                     <>
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
@@ -156,7 +182,7 @@ const QRScannerModal = ({ isOpen, onClose, onScanSuccess }) => {
                     </>
                 )}
 
-                {/* Error State Kamera */}
+                {/* Error State */}
                 {!isManualInput && scanError && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 z-30 px-6 text-center">
                         <AlertCircle className="text-red-500 w-12 h-12 mb-4"/>
@@ -165,13 +191,7 @@ const QRScannerModal = ({ isOpen, onClose, onScanSuccess }) => {
                     </div>
                 )}
 
-                {/* --- LAYOUT 2: INPUT MANUAL (PERBAIKAN VISUAL) --- */}
-                {/* PERUBAHAN CSS:
-                    1. bg-slate-950: Background solid gelap menutup kamera.
-                    2. w-full max-w-md: Membatasi lebar form di desktop (kartu di tengah).
-                    3. mx-auto: Center horizontal.
-                    4. flex justify-center items-center: Center vertikal.
-                */}
+                {/* --- MODE INPUT MANUAL --- */}
                 {isManualInput && (
                     <div className="absolute inset-0 z-50 bg-slate-950 flex flex-col justify-center items-center p-6 animate-in slide-in-from-bottom-10 duration-300">
                         <div className="w-full max-w-sm md:max-w-md bg-transparent md:bg-slate-900/50 md:p-8 md:rounded-3xl md:border border-slate-800">
@@ -188,12 +208,14 @@ const QRScannerModal = ({ isOpen, onClose, onScanSuccess }) => {
                                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                                         <span className="text-slate-500 font-mono text-lg">#</span>
                                     </div>
+                                    {/* Input Field dengan enterKeyHint="go" untuk tombol keyboard HP */}
                                     <input 
                                         type="number" 
                                         inputMode="numeric"
                                         value={manualId}
                                         onChange={(e) => setManualId(e.target.value)}
                                         placeholder="Contoh: 173820..."
+                                        enterKeyHint="go" 
                                         className="w-full bg-slate-900 border-2 border-slate-700 text-white text-lg font-mono font-bold py-4 pl-10 pr-4 rounded-xl focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/20 transition-all placeholder:text-slate-700 shadow-inner"
                                         autoFocus
                                     />
@@ -208,13 +230,26 @@ const QRScannerModal = ({ isOpen, onClose, onScanSuccess }) => {
                                     <ArrowRight size={20}/>
                                 </button>
                             </form>
+
+                            {/* Tombol Pindah ke Kamera (Menggunakan Handler Aman) */}
+                            <div className="mt-8 pt-6 border-t border-slate-800 text-center">
+                                <p className="text-slate-500 text-xs mb-3">Ingin menggunakan kamera?</p>
+                                <button 
+                                    type="button" 
+                                    onClick={handleSwitchToCamera}
+                                    className="flex items-center justify-center space-x-2 w-full py-3 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-300 hover:text-white transition-all text-sm font-bold"
+                                >
+                                    <QrCode size={18} />
+                                    <span>Scan Barcode</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 )}
 
             </div>
 
-            {/* FOOTER (Hanya tampil saat mode Kamera) */}
+            {/* FOOTER (Hanya Mode Kamera) */}
             {!isManualInput && (
                 <div className="p-6 bg-black z-20 text-center border-t border-white/10 pb-10 md:pb-6">
                     <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-3">Opsi Lain</p>
