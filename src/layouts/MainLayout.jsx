@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Menu, Search, Bell, X, Wifi, WifiOff, CheckCircle, Info, AlertTriangle, 
   Map as MapIcon, Database, Users, Sprout, LogOut, ScanLine, 
-  ChevronLeft, ChevronRight, UploadCloud 
+  ChevronLeft, ChevronRight, UploadCloud, Download 
 } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 import QRScannerModal from '../components/QRScannerModal';
@@ -46,6 +46,10 @@ const MainLayout = ({ children, user, activeTab, setActiveTab, onLogout, isOffli
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
 
+  // --- STATE PWA INSTALL ---
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showInstallBtn, setShowInstallBtn] = useState(false);
+
   // --- STATE NOTIFIKASI ---
   const [showNotifDropdown, setShowNotifDropdown] = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -53,6 +57,27 @@ const MainLayout = ({ children, user, activeTab, setActiveTab, onLogout, isOffli
   const notifRef = useRef(null);
 
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
+
+  // --- LOGIKA PWA INSTALL ---
+  useEffect(() => {
+    const handler = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallBtn(true);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setShowInstallBtn(false);
+    }
+    setDeferredPrompt(null);
+  };
 
   // --- LOGIKA HEADER ---
   const getPageTitle = () => {
@@ -151,7 +176,16 @@ const MainLayout = ({ children, user, activeTab, setActiveTab, onLogout, isOffli
             <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shadow-inner border-2 shrink-0 ${activeTab === 'profil' ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-emerald-700 text-white border-emerald-600'}`}>{getInitials(displayName)}</div>
             {isSidebarOpen && (<div className="overflow-hidden animate-in fade-in duration-300 text-left"><p className={`text-sm font-bold truncate w-36 ${activeTab === 'profil' ? 'text-white' : 'text-emerald-50'}`}>{displayName}</p><p className="text-[10px] text-emerald-300 truncate w-36 font-medium tracking-wide">Komunikator Lapangan</p></div>)}
           </button>
+          
           <div className="space-y-2">
+              {/* TOMBOL INSTALL PWA */}
+              {showInstallBtn && (
+                <button onClick={handleInstallClick} className={`w-full flex items-center transition-all duration-200 rounded-lg shadow-sm border border-blue-400/30 bg-blue-500/20 text-blue-100 hover:bg-blue-500/40 ${isSidebarOpen ? 'justify-start px-3 py-2 space-x-2' : 'justify-center p-2'}`} title="Install Aplikasi ke HP">
+                    <Download size={16} className="shrink-0"/>
+                    {isSidebarOpen && <span className="text-xs font-bold whitespace-nowrap">INSTALL APP</span>}
+                </button>
+              )}
+
               <button onClick={toggleOffline} className={`w-full flex items-center transition-all duration-200 rounded-lg shadow-sm border ${isSidebarOpen ? 'justify-start px-3 py-2 space-x-2' : 'justify-center p-2'} ${isOffline ? 'bg-amber-500 border-amber-600 text-white hover:bg-amber-600' : 'bg-emerald-800/50 border-emerald-700 text-emerald-100 hover:bg-emerald-800'}`} title={isOffline ? "Mode Luring Aktif" : "Mode Daring Aktif"}>
                 {isOffline ? <WifiOff size={16} className="shrink-0"/> : <Wifi size={16} className="shrink-0"/>}
                 {isSidebarOpen && <span className="text-xs font-bold whitespace-nowrap">{isOffline ? 'MODE LURING' : 'MODE DARING'}</span>}
@@ -180,14 +214,14 @@ const MainLayout = ({ children, user, activeTab, setActiveTab, onLogout, isOffli
 
               <div className={`${showMobileSearch ? 'hidden' : 'flex'} items-center space-x-3`}>
                 
-                {/* Antrian Upload (Hanya muncul jika ada antrian) */}
+                {/* Antrian Upload */}
                 {offlineQueueCount > 0 && (
                     <button onClick={onSync} disabled={isOffline} title="Klik untuk Sinkronisasi" className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold border shadow-sm transition-all active:scale-95 ${isOffline ? 'bg-amber-100 text-amber-700 border-amber-200 cursor-help' : 'bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200 cursor-pointer animate-pulse'}`}>
                         <UploadCloud size={14} /><span>{offlineQueueCount} Pending</span>
                     </button>
                 )}
 
-                {/* Indikator Status (Kecil) - Agar tidak redundant teksnya */}
+                {/* Indikator Status */}
                 <div className={`flex items-center justify-center w-8 h-8 rounded-full border shadow-sm cursor-help ${isOffline ? 'bg-amber-50 border-amber-200 text-amber-600' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`} title={isOffline ? "Status: Offline" : "Status: Online"}>
                   {isOffline ? <WifiOff size={16} /> : <Wifi size={16} />}
                 </div>
@@ -199,7 +233,6 @@ const MainLayout = ({ children, user, activeTab, setActiveTab, onLogout, isOffli
                     </button>
                     {showNotifDropdown && (
                         <div className="absolute right-0 mt-3 w-80 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                            {/* (Isi Notifikasi Sama) */}
                             <div className="px-4 py-3 border-b border-slate-50 bg-slate-50/50 flex justify-between items-center"><h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Pemberitahuan</h3><button className="text-[10px] text-emerald-600 hover:underline">Tandai dibaca</button></div>
                             <div className="max-h-[300px] overflow-y-auto">
                                 {notifications.length === 0 ? (<div className="p-6 text-center"><Bell size={24} className="mx-auto text-slate-200 mb-2"/><p className="text-xs text-slate-400">Belum ada notifikasi baru</p></div>) : (notifications.map((notif) => (<div key={notif.id} className={`p-4 border-b border-slate-50 hover:bg-slate-50 transition-colors flex items-start space-x-3 ${!notif.is_read ? 'bg-blue-50/30' : ''}`}><div className={`mt-0.5 p-1.5 rounded-full shrink-0 ${notif.type === 'warning' ? 'bg-amber-100' : notif.type === 'success' ? 'bg-emerald-100' : 'bg-blue-100'}`}>{getNotifIcon(notif.type)}</div><div><p className="text-sm font-bold text-slate-800 leading-tight">{notif.title}</p><p className="text-xs text-slate-500 mt-1 leading-snug">{notif.message}</p><p className="text-[10px] text-slate-300 mt-2">{new Date(notif.created_at).toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit'})}</p></div></div>)))}
@@ -213,7 +246,6 @@ const MainLayout = ({ children, user, activeTab, setActiveTab, onLogout, isOffli
         </header>
 
         {/* --- SYSTEM STATUS BAR (OFFLINE BANNER) --- */}
-        {/* Banner statis di atas konten, mendorong konten ke bawah (tidak menutupi apapun) */}
         {isOffline && (
             <div className="w-full bg-amber-100 border-b border-amber-200 px-4 py-2 flex items-center justify-center space-x-2 animate-in slide-in-from-top-2 duration-300 shrink-0 z-[900]">
                 <WifiOff size={14} className="text-amber-600 animate-pulse"/>
