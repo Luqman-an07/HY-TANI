@@ -44,16 +44,31 @@ const formatDate = (dateStr) => {
   } catch (e) { return dateStr; }
 };
 
-// Helper: Format Tanggal & Jam
+// --- FIX BUG 3: Format Tanggal & Jam Satelit ---
 const formatDateTime = (timestamp) => {
     if (!timestamp) return "Data Manual";
-    return new Date(timestamp * 1000).toLocaleString('id-ID', {
-        day: 'numeric', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit'
-    }) + " WIB";
+    try {
+        let dateObj;
+        // Cek apakah format string ISO (dari DB) atau Unix Number (dari API)
+        if (typeof timestamp === 'string') {
+            dateObj = new Date(timestamp);
+        } else {
+            // Jika angka Unix detik, kalikan 1000 agar jadi milidetik
+            dateObj = new Date(timestamp > 1e11 ? timestamp : timestamp * 1000);
+        }
+
+        // Cek jika hasilnya invalid
+        if (isNaN(dateObj.getTime())) return "Data Manual";
+
+        return dateObj.toLocaleString('id-ID', {
+            day: 'numeric', month: 'short', year: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        }) + " WIB";
+    } catch (e) {
+        return "Data Manual";
+    }
 };
 
-// PERBAIKAN: Tambahkan prop 'user' untuk data di laporan PDF
 const FarmerDetailFull = ({ farm, user, onBack, onCompleteVisit, onEdit, onDelete }) => {
   const [showMenu, setShowMenu] = useState(false); 
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
@@ -123,10 +138,8 @@ const FarmerDetailFull = ({ farm, user, onBack, onCompleteVisit, onEdit, onDelet
     window.open(`https://wa.me/${cleanNumber}?text=${encodeURIComponent(message)}`, '_blank');
   };
 
-  // --- HANDLER DOWNLOAD ---
   const handleDownloadReport = () => { 
       try {
-          // Panggil fungsi generator dengan data farm dan user yang login
           const currentUser = user || { full_name: "Komunikator Lapangan" };
           generateFarmerReport(farm, currentUser);
       } catch (error) {
@@ -141,13 +154,13 @@ const FarmerDetailFull = ({ farm, user, onBack, onCompleteVisit, onEdit, onDelet
       
       {/* MODAL PETA FULLSCREEN */}
       {isMapFullscreen && (
-          <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col animate-in fade-in duration-200">
+          <div className="fixed inset-0 z-[9999] bg-black/90 flex flex-col animate-in fade-in duration-200">
               <div className="flex justify-between items-center p-4 bg-slate-900 text-white">
                   <div><h3 className="font-bold text-lg">{farm.name}</h3><p className="text-xs text-slate-400">Analisis Citra Satelit</p></div>
                   <button onClick={() => setIsMapFullscreen(false)} className="p-2 bg-white/10 rounded-full hover:bg-white/20"><X size={24}/></button>
               </div>
               <div className="flex-1 w-full relative">
-                  <MapContainer center={[centerLat, centerLng]} zoom={18} style={{ height: "100%", width: "100%" }}>
+                  <MapContainer center={[centerLat, centerLng]} zoom={18} style={{ height: "100%", width: "100%", zIndex: 10 }}>
                       <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" attribution="Esri" />
                       <Polygon positions={farmPolygon} pathOptions={{ color: statusColor.border, fillColor: statusColor.fill, fillOpacity: 0.4, weight: 2 }} />
                       <Marker position={[centerLat, centerLng]}></Marker>
@@ -173,16 +186,6 @@ const FarmerDetailFull = ({ farm, user, onBack, onCompleteVisit, onEdit, onDelet
             </h1>
             <p className="text-xs text-slate-500 flex items-center mt-0.5"><MapPin size={12} className="mr-1"/> {farm.name} • {farm.size} Ha</p>
           </div>
-        </div>
-        
-        <div className="hidden md:flex items-center space-x-4 mr-4 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100">
-            <CloudSun size={20} className="text-blue-500"/>
-            <div>
-                <p className="text-xs font-bold text-slate-700">Cerah Berawan</p>
-                <div className="flex items-center text-[10px] text-slate-500 space-x-2">
-                    <span>32°C</span><span className="flex items-center"><Wind size={10} className="mr-1"/> 12 km/h</span><span className="flex items-center"><Droplets size={10} className="mr-1"/> 60%</span>
-                </div>
-            </div>
         </div>
         
         <div className="relative">
@@ -242,8 +245,10 @@ const FarmerDetailFull = ({ farm, user, onBack, onCompleteVisit, onEdit, onDelet
 
                     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col md:flex-row h-[500px] md:h-[400px]">
                         <div className="w-full md:w-1/2 h-1/2 md:h-full relative bg-slate-100 border-b md:border-b-0 md:border-r border-slate-200 group">
-                            <button onClick={() => setIsMapFullscreen(true)} className="absolute top-3 right-3 z-[400] bg-white text-slate-700 p-2 rounded-lg shadow-md hover:bg-slate-50 hover:text-emerald-600 transition-all opacity-80 group-hover:opacity-100" title="Perbesar Peta"><Maximize size={18}/></button>
-                            <MapContainer center={[centerLat, centerLng]} zoom={15} scrollWheelZoom={true} zoomControl={false} style={{ height: "100%", width: "100%" }}>
+                            {/* FIX MODAL OVERLAP: Turunkan z-[400] menjadi z-20 */}
+                            <button onClick={() => setIsMapFullscreen(true)} className="absolute top-3 right-3 z-20 bg-white text-slate-700 p-2 rounded-lg shadow-md hover:bg-slate-50 hover:text-emerald-600 transition-all opacity-80 group-hover:opacity-100" title="Perbesar Peta"><Maximize size={18}/></button>
+                            
+                            <MapContainer center={[centerLat, centerLng]} zoom={15} scrollWheelZoom={true} zoomControl={false} style={{ height: "100%", width: "100%", zIndex: 10 }}>
                                 <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" attribution="Esri" />
                                 <Polygon positions={farmPolygon} pathOptions={{ color: statusColor.border, fillColor: statusColor.fill, fillOpacity: 0.5, weight: 2 }}>
                                     <Tooltip sticky direction="top" offset={[0, -10]}><div className="text-xs font-bold">{farm.name}</div><div className={`text-[10px] uppercase ${statusColor.text}`}>{farm.status}</div></Tooltip>
@@ -251,7 +256,9 @@ const FarmerDetailFull = ({ farm, user, onBack, onCompleteVisit, onEdit, onDelet
                                 <Marker position={[centerLat, centerLng]}></Marker>
                                 <FitBoundsToPolygon polygon={farmPolygon} />
                             </MapContainer>
-                            <div className="absolute bottom-3 left-3 z-[400] bg-white/90 backdrop-blur px-3 py-1.5 rounded-lg shadow border border-slate-200 text-xs font-medium text-slate-600">Visualisasi Bentuk & Kesehatan Lahan</div>
+                            
+                            {/* FIX MODAL OVERLAP: Turunkan z-[400] menjadi z-20 */}
+                            <div className="absolute bottom-3 left-3 z-20 bg-white/90 backdrop-blur px-3 py-1.5 rounded-lg shadow border border-slate-200 text-xs font-medium text-slate-600">Visualisasi Bentuk & Kesehatan Lahan</div>
                         </div>
 
                         <div className="w-full md:w-1/2 p-6 flex flex-col h-1/2 md:h-full overflow-y-auto">

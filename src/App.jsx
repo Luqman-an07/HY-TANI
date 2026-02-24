@@ -3,7 +3,6 @@ import { Database, Wifi, WifiOff, CloudOff, Loader2, RefreshCw, SignalLow } from
 import { supabase } from './lib/supabaseClient'; 
 import { registerPolygonToSatellite, getSatelliteNDVI } from './lib/satelliteApi';
 import { addToQueue, processOfflineQueue, getQueue } from './lib/offlineSync';
-// IMPORT BARU: Generator Laporan
 import { generatePDFReport } from './lib/reportGenerator'; 
 
 // Imports Data
@@ -31,31 +30,23 @@ import FarmerDetailFull from './layouts/FarmerDetailFull';
 import ProfileView from './layouts/ProfileView';
 
 const App = () => {
-  // --- STATE AUTH ---
   const [session, setSession] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
 
-  // --- STATE UI ---
   const [activeTab, setActiveTab] = useState('peta');
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [notification, setNotification] = useState(null);
   const [isDataLoading, setIsDataLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false); 
-  
-  // STATE: DETEKSI SINYAL LEMAH ("Lie-Fi")
   const [isUnstable, setIsUnstable] = useState(false);
-
-  // State untuk Profil & Header Badge
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
   
-  // --- STATE DATA ---
   const [farms, setFarms] = useState(() => {
     const savedData = localStorage.getItem('hytani_data');
     return savedData ? JSON.parse(savedData) : []; 
   });
 
-  // --- STATE MODALS ---
   const [selectedFarm, setSelectedFarm] = useState(null); 
   const [viewingFarm, setViewingFarm] = useState(null);   
   const [showAddModal, setShowAddModal] = useState(false);
@@ -66,9 +57,6 @@ const App = () => {
   const [showSimModal, setShowSimModal] = useState(false);
   const [checkInFarm, setCheckInFarm] = useState(null); 
 
-  // ==========================================
-  // 1. AUTH & INITIALIZATION
-  // ==========================================
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -98,7 +86,6 @@ const App = () => {
     localStorage.setItem('hytani_data', JSON.stringify(farms));
   }, [farms]);
 
-  // --- LOGIKA DETEKSI JARINGAN (Connection Quality Monitor) ---
   useEffect(() => {
     const handleOnline = () => {
         setIsOffline(false);
@@ -115,11 +102,8 @@ const App = () => {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Monitor Sinyal Lemah setiap 15 detik
     const qualityInterval = setInterval(async () => {
         if (isOffline) return; 
-
-        // 1. Cek Network Information API
         const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
         if (connection) {
             if (connection.effectiveType === 'slow-2g' || connection.effectiveType === '2g') {
@@ -127,13 +111,10 @@ const App = () => {
                 return;
             }
         }
-
-        // 2. Fallback Ping Test (Fetch Favicon kecil)
         try {
             await fetch('https://www.google.com/favicon.ico', { mode: 'no-cors', signal: AbortSignal.timeout(3000) });
             setIsUnstable(false); 
         } catch (error) {
-            console.log("Network detected as unstable/slow");
             setIsUnstable(true);
         }
     }, 15000);
@@ -160,48 +141,66 @@ const App = () => {
     }
   };
 
+  // ==========================================
+  // PERUBAHAN 1: MENGAMBIL DATA DARI 2 TABEL
+  // ==========================================
   const fetchFarms = async () => {
     if (!navigator.onLine) return; 
     setIsDataLoading(true);
     try {
-      const { data, error } = await supabase.from('farms').select('*').order('created_at', { ascending: false });
-      if (error) throw error;
+      // 1. Ambil Data Induk Lahan
+      const { data: farmsData, error: farmsError } = await supabase.from('farms').select('*').order('created_at', { ascending: false });
+      if (farmsError) throw farmsError;
 
-      const mappedData = data.map(f => ({
-        id: f.id,
-        farmer: f.farmer_name,
-        contact: f.contact,
-        age: f.age,
-        joinDate: f.join_date,
-        name: f.farm_name,
-        size: f.size_ha ? f.size_ha.toString() : "0",
-        lat: f.lat,
-        lng: f.lng,
-        plantingDate: f.planting_date,
-        harvestDate: f.harvest_date,
-        nextVisit: f.next_visit,
-        status: f.status,
-        ndvi: f.ndvi ? f.ndvi.toString() : "0",
-        satelliteDate: f.satellite_date,
-        prediction: f.prediction,
-        value: f.est_value,
-        waterScore: f.water_score,
-        fertScore: f.fert_score,
-        pestScore: f.pest_score,
-        plots: generatePlots(f.status),
-        lastUpdate: new Date(f.created_at).toLocaleDateString('id-ID'),
-        polygon: f.polygon_data || [], 
-        external_polygon_id: f.external_polygon_id
-      }));
+      // 2. Ambil Data Riwayat Kunjungan
+      const { data: logsData, error: logsError } = await supabase.from('visit_logs').select('*').order('visited_at', { ascending: false });
+      const logs = logsData || [];
+
+      // 3. Gabungkan Data (Mapping)
+      const mappedData = farmsData.map(f => {
+        // Filter log kunjungan khusus untuk lahan ini
+        const farmLogs = logs.filter(log => log.farm_id === f.id);
+
+        return {
+          id: f.id,
+          farmer: f.farmer_name,
+          contact: f.contact,
+          age: f.age,
+          joinDate: f.join_date,
+          name: f.farm_name,
+          size: f.size_ha ? f.size_ha.toString() : "0",
+          lat: f.lat,
+          lng: f.lng,
+          plantingDate: f.planting_date,
+          harvestDate: f.harvest_date,
+          nextVisit: f.next_visit,
+          visitHistory: farmLogs, // <--- Memasukkan array dari tabel visit_logs
+          status: f.status,
+          ndvi: f.ndvi ? f.ndvi.toString() : "0",
+          satelliteDate: f.satellite_date,
+          prediction: f.prediction,
+          value: f.est_value,
+          waterScore: f.water_score,
+          fertScore: f.fert_score,
+          pestScore: f.pest_score,
+          plots: generatePlots(f.status),
+          lastUpdate: new Date(f.created_at).toLocaleDateString('id-ID'),
+          polygon: f.polygon_data || [], 
+          external_polygon_id: f.external_polygon_id
+        };
+      });
+      
       setFarms(mappedData);
-    } catch (error) { console.log("Fetch skipped"); } 
+      
+      if (selectedFarm) {
+          const updatedSelected = mappedData.find(m => m.id === selectedFarm.id);
+          if (updatedSelected) setSelectedFarm(updatedSelected);
+      }
+    } catch (error) { console.log("Fetch skipped", error); } 
     finally { setIsDataLoading(false); }
   };
 
-  // ==========================================
-  // 2. HANDLERS
-  // ==========================================
-  
+  // ... (Fungsi sync, scan, form submit, delete, dll tetap sama) ...
   const handleManualSync = async () => {
       if (!navigator.onLine) {
           showNotification("Tidak ada koneksi internet.");
@@ -234,7 +233,6 @@ const App = () => {
           setCheckInFarm(null);
           return;
       }
-
       try {
           const { data, error } = await supabase.rpc('process_checkin', { target_farm_id: farmId });
           if (error) throw error;
@@ -250,11 +248,9 @@ const App = () => {
 
   const handleFormSubmit = async (submittedData) => {
     if (!session) return;
-    
     const villageLat = userProfile?.villageData?.lat || -6.2088;
     const villageLng = userProfile?.villageData?.lng || 106.8456;
     const randomOffset = () => (Math.random() - 0.5) * 0.003; 
-    
     const finalLat = submittedData.lat || (villageLat + randomOffset());
     const finalLng = submittedData.lng || (villageLng + randomOffset());
 
@@ -393,7 +389,6 @@ const App = () => {
   const handleLocationUpdate = async (id, newLat, newLng, newPolygon) => {
     const dbPayload = { lat: newLat, lng: newLng };
     if (newPolygon) dbPayload.polygon_data = newPolygon;
-
     const isActuallyOnline = navigator.onLine && !isOffline;
     if (isActuallyOnline) {
         await supabase.from('farms').update(dbPayload).eq('id', id);
@@ -402,11 +397,8 @@ const App = () => {
         addToQueue('UPDATE', { id, ...dbPayload });
         showNotification("OFFLINE: Posisi baru disimpan lokal.");
     }
-
     setFarms(prevFarms => prevFarms.map(f => {
-        if (f.id === id) {
-            return { ...f, lat: newLat, lng: newLng, polygon: newPolygon || f.polygon };
-        }
+        if (f.id === id) { return { ...f, lat: newLat, lng: newLng, polygon: newPolygon || f.polygon }; }
         return f;
     }));
   };
@@ -417,10 +409,8 @@ const App = () => {
         return; 
     }
     const updates = { 
-        id: session.user.id, 
-        full_name: session.user.user_metadata.full_name, 
-        village_data: villageData, 
-        updated_at: new Date() 
+        id: session.user.id, full_name: session.user.user_metadata.full_name, 
+        village_data: villageData, updated_at: new Date() 
     };
     const { error } = await supabase.from('profiles').upsert(updates);
     if (!error) { 
@@ -431,23 +421,15 @@ const App = () => {
     }
   };
 
-  // --- HANDLER DOWNLOAD PDF (REAL) ---
   const handleDownloadReport = () => {
     if (farms.length === 0) {
         showNotification("Tidak ada data untuk diunduh.");
         return;
     }
-
     try {
         showNotification("Menyiapkan dokumen PDF...");
-        
-        // Panggil generator dengan data farms dan profil user saat ini
         generatePDFReport(farms, userProfile);
-        
-        setTimeout(() => {
-            showNotification("Laporan berhasil diunduh!");
-        }, 1500);
-        
+        setTimeout(() => { showNotification("Laporan berhasil diunduh!"); }, 1500);
     } catch (error) {
         console.error("Download Error:", error);
         showNotification("Gagal membuat laporan PDF.");
@@ -464,27 +446,15 @@ const App = () => {
             const latOffset = (Math.random() - 0.5) * 0.015;
             const lngOffset = (Math.random() - 0.5) * 0.015;
             return {
-                user_id: session.user.id,
-                farmer_name: farm.farmer,
-                contact: farm.contact,
-                age: parseInt(farm.age) || 40,
-                join_date: farm.joinDate || new Date().toISOString(),
-                farm_name: farm.name,
-                size_ha: parseFloat(farm.size) || 1.0,
-                lat: centerLat + latOffset,
-                lng: centerLng + lngOffset,
-                planting_date: farm.plantingDate,
-                harvest_date: farm.harvestDate,
-                next_visit: farm.nextVisit,
-                status: farm.status,
-                ndvi: parseFloat(farm.ndvi),
-                prediction: farm.prediction,
-                est_value: farm.value,
-                water_score: farm.waterScore || 80,
-                fert_score: farm.fertScore || 80,
-                pest_score: farm.pestScore || 80,
-                external_polygon_id: null,
-                polygon_data: null 
+                user_id: session.user.id, farmer_name: farm.farmer, contact: farm.contact,
+                age: parseInt(farm.age) || 40, join_date: farm.joinDate || new Date().toISOString(),
+                farm_name: farm.name, size_ha: parseFloat(farm.size) || 1.0,
+                lat: centerLat + latOffset, lng: centerLng + lngOffset,
+                planting_date: farm.plantingDate, harvest_date: farm.harvestDate,
+                next_visit: farm.nextVisit, status: farm.status, ndvi: parseFloat(farm.ndvi),
+                prediction: farm.prediction, est_value: farm.value,
+                water_score: farm.waterScore || 80, fert_score: farm.fertScore || 80, pest_score: farm.pestScore || 80,
+                external_polygon_id: null, polygon_data: null 
             };
         });
         const { error } = await supabase.from('farms').insert(simulationPayloads);
@@ -498,12 +468,121 @@ const App = () => {
     }
   };
 
+  // ==========================================
+  // FIX: HANDLER KUNJUNGAN (ANTI BUG ZONA WAKTU)
+  // ==========================================
+  const handleVisitSaved = async (arg1, arg2) => { 
+    if (!completingFarm) return;
+
+    // 1. Ekstrak data
+    let visitNotes = '';
+    let nextVisitInput = null;
+
+    if (typeof arg1 === 'object' && arg1 !== null) {
+        visitNotes = arg1.notes || arg1.note || '';
+        nextVisitInput = arg1.nextVisit || arg1.date;
+    } else {
+        visitNotes = arg1;
+        nextVisitInput = arg2;
+    }
+
+    // 2. Olah Tanggal dengan TRICK 12 SIANG (Noon Trick)
+    let nextVisitISO;
+    
+    if (nextVisitInput !== null && nextVisitInput !== undefined) {
+        const inputStr = String(nextVisitInput).trim();
+        
+        // SKENARIO A: Rutin (Otomatis Tambah Hari)
+        if (/^\d{1,3}$/.test(inputStr)) {
+            const d = new Date();
+            d.setDate(d.getDate() + parseInt(inputStr, 10));
+            d.setHours(12, 0, 0, 0); // <--- KUNCI: Paksa jam 12 siang
+            nextVisitISO = d.toISOString();
+        } 
+        // SKENARIO B: Manual Kalender
+        else {
+            const parsedDate = new Date(inputStr);
+            
+            if (!isNaN(parsedDate.getTime())) {
+                if (parsedDate.getFullYear() < 2024) {
+                    parsedDate.setFullYear(new Date().getFullYear()); 
+                }
+                parsedDate.setHours(12, 0, 0, 0); // <--- KUNCI: Paksa jam 12 siang
+                nextVisitISO = parsedDate.toISOString();
+            } else {
+                // Fallback
+                const d = new Date();
+                d.setDate(d.getDate() + 7);
+                d.setHours(12, 0, 0, 0);
+                nextVisitISO = d.toISOString();
+            }
+        }
+    } else {
+        // Default jika kosong (7 hari)
+        const d = new Date();
+        d.setDate(d.getDate() + 7);
+        d.setHours(12, 0, 0, 0);
+        nextVisitISO = d.toISOString();
+    }
+
+    // 3. Siapkan Payload untuk tabel visit_logs
+    const newLog = {
+        farm_id: completingFarm.id,
+        visited_at: new Date().toISOString(), 
+        notes: visitNotes || 'Pengecekan rutin dan wawancara petani.', 
+        status_snapshot: completingFarm.status,
+        officer_name: userProfile?.full_name || 'Komunikator Lapangan'
+    };
+
+    // 4. Update State Lokal (Langsung berubah, anti glitch)
+    const updatedHistory = [newLog, ...(completingFarm.visitHistory || [])];
+    
+    setFarms(prevFarms => prevFarms.map(f => {
+        if (f.id === completingFarm.id) {
+            return { ...f, visitHistory: updatedHistory, nextVisit: nextVisitISO };
+        }
+        return f;
+    }));
+
+    // Update UI Detail Lahan
+    if (selectedFarm && selectedFarm.id === completingFarm.id) {
+        setSelectedFarm(prev => ({ ...prev, visitHistory: updatedHistory, nextVisit: nextVisitISO }));
+    }
+
+    // 5. Eksekusi ke Supabase
+    const isActuallyOnline = navigator.onLine && !isOffline;
+    
+    if (isActuallyOnline) {
+        try {
+            // A. Simpan Log
+            const { error: logError } = await supabase.from('visit_logs').insert([newLog]);
+            if (logError) throw logError;
+
+            // B. Update Jadwal (Dengan tanggal yang kebal Timezone)
+            const { error: farmError } = await supabase.from('farms').update({ next_visit: nextVisitISO }).eq('id', completingFarm.id);
+            if (farmError) throw farmError;
+            
+            showNotification("✅ Kunjungan berhasil dicatat ke server!"); 
+            
+            // Tarik data baru di background
+            fetchFarms(); 
+        } catch(e) { 
+            console.error("Supabase Error:", e);
+            showNotification("❌ Gagal menyimpan data."); 
+        }
+    } else {
+        addToQueue('UPDATE', { id: completingFarm.id, next_visit: nextVisitISO });
+        showNotification("✅ Kunjungan dicatat (Offline)."); 
+    }
+    
+    setCompletingFarm(null); 
+};
+
   const handleLoadSimulationClick = () => setShowSimModal(true); 
   const handleLogout = async () => { await supabase.auth.signOut(); setSession(null); setUserProfile(null); setActiveTab('peta'); };
   const showNotification = (msg) => { setNotification(msg); setTimeout(() => setNotification(null), 3000); };
   const confirmDelete = (farm) => { setFarmToDelete(farm); setBulkDeleteIds([]); };
   const confirmBulkDelete = (ids) => { setBulkDeleteIds(ids); setFarmToDelete(null); };
-  const handleVisitSaved = () => { setCompletingFarm(null); showNotification("Kunjungan dicatat!"); };
 
   // --- RENDER ---
   if (isLoadingAuth) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 size={40} className="text-emerald-600 animate-spin"/></div>;
@@ -512,17 +591,10 @@ const App = () => {
   return (
     <MainLayout 
         user={{...session.user, ...userProfile}} 
-        activeTab={activeTab} 
-        setActiveTab={setActiveTab}
-        onLogout={handleLogout}
-        isOffline={isOffline}
-        toggleOffline={() => setIsOffline(!isOffline)}
-        onGlobalScan={handleGlobalScan}
-        offlineQueueCount={offlineQueueCount}
-        onSync={handleManualSync}
+        activeTab={activeTab} setActiveTab={setActiveTab} onLogout={handleLogout}
+        isOffline={isOffline} toggleOffline={() => setIsOffline(!isOffline)}
+        onGlobalScan={handleGlobalScan} offlineQueueCount={offlineQueueCount} onSync={handleManualSync}
     >
-      
-      {/* GLOBAL LOADING */}
       {(isDataLoading || isSyncing) && (
         <div className="fixed inset-0 bg-white/50 backdrop-blur-sm z-[10000] flex items-center justify-center">
             <div className="bg-white p-4 rounded-xl shadow-xl flex items-center space-x-3">
@@ -532,8 +604,6 @@ const App = () => {
         </div>
       )}
 
-      {/* NOTIFICATION (TOAST - KANAN ATAS) */}
-      {/* Z-Index: 11000 (Paling Tinggi) */}
       {notification && (
         <div className="fixed top-20 right-4 md:top-6 md:right-6 z-[11000] animate-in slide-in-from-right fade-in duration-300">
           <div className="bg-slate-900/95 backdrop-blur text-white px-5 py-3.5 rounded-xl shadow-2xl flex items-center border border-slate-700 max-w-[85vw] md:max-w-md">
@@ -543,15 +613,10 @@ const App = () => {
         </div>
       )}
 
-      {/* TOAST SARAN OFFLINE (Jika Sinyal Buruk / Unstable) */}
-      {/* Muncul di bawah tengah, menawarkan mode offline */}
       {isUnstable && !isOffline && (
         <div className="fixed bottom-24 left-1/2 -translate-x-1/2 md:bottom-6 md:left-auto md:right-24 z-[11000] animate-in slide-in-from-bottom-4 duration-500 w-full max-w-sm px-4">
            <div className="bg-orange-600/95 backdrop-blur text-white p-4 rounded-2xl shadow-2xl border border-orange-500 flex flex-col items-start gap-2">
-              <div className="flex items-center space-x-2">
-                  <SignalLow size={20} className="animate-pulse"/> 
-                  <span className="font-bold text-sm">Sinyal Tidak Stabil</span>
-              </div>
+              <div className="flex items-center space-x-2"><SignalLow size={20} className="animate-pulse"/> <span className="font-bold text-sm">Sinyal Tidak Stabil</span></div>
               <p className="text-xs text-orange-100 leading-tight">Proses penyimpanan data mungkin gagal atau lambat.</p>
               <div className="flex space-x-2 w-full mt-1">
                   <button onClick={() => setIsUnstable(false)} className="flex-1 py-1.5 px-3 bg-orange-700 hover:bg-orange-800 rounded-lg text-xs font-bold transition-colors">Abaikan</button>
@@ -561,37 +626,18 @@ const App = () => {
         </div>
       )}
 
-      {/* --- GLOBAL MODALS --- */}
       <AddDataModal isOpen={showAddModal} onClose={() => { setShowAddModal(false); setEditingFarm(null); }} onSave={handleFormSubmit} initialData={editingFarm} userLocation={userProfile?.villageData} />
       <CompleteVisitModal isOpen={!!completingFarm} onClose={() => setCompletingFarm(null)} onSave={handleVisitSaved} farmName={completingFarm?.farmer} />
       <DeleteModal isOpen={!!farmToDelete || bulkDeleteIds.length > 0} onClose={() => { setFarmToDelete(null); setBulkDeleteIds([]); }} onConfirm={executeDelete} farmName={farmToDelete ? farmToDelete.farmer : `${bulkDeleteIds.length} Data Terpilih`} />
       <FarmerDetailModal isOpen={!!viewingFarm} onClose={() => setViewingFarm(null)} farm={viewingFarm} />
       <SetupProfileModal isOpen={session && !userProfile?.villageData} onSave={handleProfileSave} userName={session?.user?.user_metadata?.full_name || 'Komunikator'} />
       <ConfirmationModal isOpen={showSimModal} onClose={() => setShowSimModal(false)} onConfirm={executeLoadSimulation} title="Muat Simulasi?" message="Data dummy akan ditambahkan." type="info" confirmLabel="Muat" />
-      
-      {/* MODAL CHECK-IN BARU */}
-      <CheckInModal 
-        isOpen={!!checkInFarm} 
-        onClose={() => setCheckInFarm(null)} 
-        farm={checkInFarm} 
-        onConfirm={executeCheckIn} 
-      />
+      <CheckInModal isOpen={!!checkInFarm} onClose={() => setCheckInFarm(null)} farm={checkInFarm} onConfirm={executeCheckIn} />
 
-      {/* --- PAGE CONTENT --- */}
       {activeTab === 'profil' ? (
-        <ProfileView 
-            user={{...session.user, ...userProfile}}
-            farms={farms}
-            onSaveProfile={handleProfileSave}
-            isOffline={isOffline}
-            offlineQueueCount={offlineQueueCount}
-            onSync={handleManualSync}
-        />
+        <ProfileView user={{...session.user, ...userProfile}} farms={farms} onSaveProfile={handleProfileSave} isOffline={isOffline} offlineQueueCount={offlineQueueCount} onSync={handleManualSync} />
       ) : farms.length === 0 && !isDataLoading ? (
-        <EmptyState 
-            onAddManual={() => { setEditingFarm(null); setShowAddModal(true); }} 
-            onLoadDummy={handleLoadSimulationClick} 
-        />
+        <EmptyState onAddManual={() => { setEditingFarm(null); setShowAddModal(true); }} onLoadDummy={handleLoadSimulationClick} />
       ) : (
         <>
           {activeTab === 'peta' && (selectedFarm ? 
@@ -604,7 +650,6 @@ const App = () => {
           )}
         </>
       )}
-
     </MainLayout>
   );
 };
